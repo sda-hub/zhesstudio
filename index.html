@@ -1,0 +1,538 @@
+import React, { useState, useEffect, useRef } from 'react';
+import { initializeApp } from 'firebase/app';
+import { getAuth, signInAnonymously, signInWithCustomToken, onAuthStateChanged } from 'firebase/auth';
+import { getFirestore, doc, setDoc, getDoc, collection, onSnapshot, writeBatch } from 'firebase/firestore';
+import { 
+  Calendar, Clock, UserCheck, MessageSquare, AlertCircle, 
+  Save, ClipboardList, BookOpen, Cloud, CloudOff, FileSpreadsheet, Download, Upload
+} from 'lucide-react';
+
+// Firebase 配置
+const firebaseConfig = JSON.parse(__firebase_config);
+const app = initializeApp(firebaseConfig);
+const auth = getAuth(app);
+const db = getFirestore(app);
+const appId = typeof __app_id !== 'undefined' ? __app_id : 'grade4-teacher-log';
+
+// 課表資料
+const scheduleData = {
+  1: [
+    { slot: "第一節", subject: "社會", teacher: "導師" },
+    { slot: "第二節", subject: "國語", teacher: "導師" },
+    { slot: "第三節", subject: "國際瞭望", teacher: "林巧敏師" },
+    { slot: "第四節", subject: "音樂(2)", teacher: "柏彥師" }
+  ],
+  2: [
+    { slot: "第一節", subject: "自然(3)", teacher: "劉佳峻師" },
+    { slot: "第二節", subject: "自然(3)", teacher: "劉佳峻師" },
+    { slot: "第三節", subject: "數學", teacher: "導師" },
+    { slot: "第四節", subject: "國語", teacher: "導師" },
+    { slot: "第五節", subject: "美勞", teacher: "導師" },
+    { slot: "第六節", subject: "奇藝探索-閱讀", teacher: "蘇瓊瑤師" },
+    { slot: "第七節", subject: "綜合", teacher: "導師" }
+  ],
+  3: [
+    { slot: "第一節", subject: "數學", teacher: "導師" },
+    { slot: "第二節", subject: "國語", teacher: "導師" },
+    { slot: "第三節", subject: "體育(2)", teacher: "林彥竹師" },
+    { slot: "第四節", subject: "健康", teacher: "黃靖桂師" }
+  ],
+  4: [
+    { slot: "第一節", subject: "未來公民", teacher: "曹聖堯師" },
+    { slot: "第二節", subject: "數學", teacher: "導師" },
+    { slot: "第三節", subject: "國語", teacher: "導師" },
+    { slot: "第四節", subject: "英語", teacher: "林巧敏師" },
+    { slot: "第五節", subject: "音樂(2)", teacher: "柏彥師" },
+    { slot: "第六節", subject: "自然(3)", teacher: "劉佳峻師" },
+    { slot: "第七節", subject: "社會", teacher: "導師" }
+  ],
+  5: [
+    { slot: "第一節", subject: "彈性(全校)", teacher: "導師" },
+    { slot: "第二節", subject: "數學", teacher: "導師" },
+    { slot: "第三節", subject: "國語", teacher: "導師" },
+    { slot: "第四節", subject: "社會", teacher: "導師" },
+    { slot: "第五節", subject: "本土", teacher: "劉昕妍師" },
+    { slot: "第六節", subject: "體育(2)", teacher: "林彥竹師" },
+    { slot: "第七節", subject: "綜合", teacher: "導師" }
+  ]
+};
+
+const getInitialStateForDate = (targetDate) => {
+  const day = new Date(targetDate).getDay();
+  const subjects = scheduleData[day] || [];
+  return {
+    sections: subjects.map(s => ({ ...s, note: "" })),
+    specialEvents: "",
+    parentComm: "",
+    todayFollowUp: { students: "", subjects: "" },
+    tomorrowFollowUp: { students: "", subjects: "" },
+    subjectTeacherRequests: ""
+  };
+};
+
+const App = () => {
+  const [user, setUser] = useState(null);
+  const [date, setDate] = useState(new Date().toISOString().split('T')[0]);
+  const [currentLog, setCurrentLog] = useState(() => getInitialStateForDate(new Date().toISOString().split('T')[0]));
+  const [isSyncing, setIsSyncing] = useState(false);
+  const [allLogs, setAllLogs] = useState({});
+  const fileInputRef = useRef(null);
+
+  useEffect(() => {
+    const initAuth = async () => {
+      try {
+        if (typeof __initial_auth_token !== 'undefined' && __initial_auth_token) {
+          await signInWithCustomToken(auth, __initial_auth_token);
+        } else {
+          await signInAnonymously(auth);
+        }
+      } catch (error) {
+        console.error("Auth error:", error);
+      }
+    };
+    initAuth();
+    return onAuthStateChanged(auth, setUser);
+  }, []);
+
+  useEffect(() => {
+    if (!user) return;
+    const logRef = doc(db, 'artifacts', appId, 'public', 'data', 'logs', date);
+    setIsSyncing(true);
+    const unsubscribe = onSnapshot(logRef, (docSnap) => {
+      if (docSnap.exists()) {
+        setCurrentLog(docSnap.data());
+      } else {
+        setCurrentLog(getInitialStateForDate(date));
+      }
+      setIsSyncing(false);
+    }, (err) => {
+      setIsSyncing(false);
+    });
+    return () => unsubscribe();
+  }, [user, date]);
+
+  useEffect(() => {
+    if (!user) return;
+    const logsCol = collection(db, 'artifacts', appId, 'public', 'data', 'logs');
+    return onSnapshot(logsCol, (snapshot) => {
+      const logs = {};
+      snapshot.forEach(doc => { logs[doc.id] = doc.data(); });
+      setAllLogs(logs);
+    });
+  }, [user]);
+
+  const saveToCloud = async (newData) => {
+    if (!user) return;
+    setIsSyncing(true);
+    try {
+      const logRef = doc(db, 'artifacts', appId, 'public', 'data', 'logs', date);
+      await setDoc(logRef, newData);
+      showToast("雲端同步成功");
+    } catch (error) {
+      showToast("儲存失敗");
+    } finally {
+      setIsSyncing(false);
+    }
+  };
+
+  const handleInputChange = (field, value) => {
+    const updated = { ...currentLog, [field]: value };
+    setCurrentLog(updated);
+  };
+
+  const handleSectionChange = (index, note) => {
+    const sections = [...currentLog.sections];
+    sections[index].note = note;
+    const updated = { ...currentLog, sections };
+    setCurrentLog(updated);
+  };
+
+  const handleFollowUpChange = (type, field, value) => {
+    const updated = { 
+      ...currentLog, 
+      [type]: { ...currentLog[type], [field]: value } 
+    };
+    setCurrentLog(updated);
+  };
+
+  const exportToCSV = () => {
+    if (Object.keys(allLogs).length === 0) {
+      showToast("目前沒有日誌可匯出");
+      return;
+    }
+    
+    let csvContent = "\uFEFF日期,節次,科目,授課老師,教學紀錄,特殊事件,告知家長,本日追蹤學生,本日追蹤科目,隔日預報學生,隔日預報科目,科任要求\n";
+    
+    Object.keys(allLogs).sort().forEach(d => {
+      const log = allLogs[d];
+      if (log.sections && log.sections.length > 0) {
+        log.sections.forEach(s => {
+          const fields = [
+            d,
+            s.slot || "",
+            s.subject || "",
+            s.teacher || "",
+            s.note || "",
+            log.specialEvents || "",
+            log.parentComm || "",
+            log.todayFollowUp?.students || "",
+            log.todayFollowUp?.subjects || "",
+            log.tomorrowFollowUp?.students || "",
+            log.tomorrowFollowUp?.subjects || "",
+            log.subjectTeacherRequests || ""
+          ];
+          const escapedFields = fields.map(f => `"${String(f).replace(/"/g, '""')}"`);
+          csvContent += escapedFields.join(",") + "\n";
+        });
+      }
+    });
+
+    const blob = new Blob([csvContent], { type: 'text/csv;charset=utf-8;' });
+    const url = URL.createObjectURL(blob);
+    const link = document.createElement("a");
+    link.href = url;
+    link.download = `教師日誌匯出_${new Date().toISOString().split('T')[0]}.csv`;
+    link.click();
+    URL.revokeObjectURL(url);
+  };
+
+  // 優化後的 CSV 解析器，能處理換行與引號
+  const parseCSVLine = (csvText) => {
+    const rows = [];
+    let currentRow = [];
+    let currentField = '';
+    let inQuotes = false;
+
+    for (let i = 0; i < csvText.length; i++) {
+      const char = csvText[i];
+      const nextChar = csvText[i+1];
+
+      if (inQuotes) {
+        if (char === '"' && nextChar === '"') {
+          currentField += '"';
+          i++;
+        } else if (char === '"') {
+          inQuotes = false;
+        } else {
+          currentField += char;
+        }
+      } else {
+        if (char === '"') {
+          inQuotes = true;
+        } else if (char === ',') {
+          currentRow.push(currentField);
+          currentField = '';
+        } else if (char === '\n' || char === '\r') {
+          if (currentField !== '' || currentRow.length > 0) {
+            currentRow.push(currentField);
+            rows.push(currentRow);
+            currentRow = [];
+            currentField = '';
+          }
+          if (char === '\r' && nextChar === '\n') i++;
+        } else {
+          currentField += char;
+        }
+      }
+    }
+    if (currentField !== '' || currentRow.length > 0) {
+      currentRow.push(currentField);
+      rows.push(currentRow);
+    }
+    return rows;
+  };
+
+  const importCSV = (e) => {
+    const file = e.target.files[0];
+    if (!file) return;
+
+    const reader = new FileReader();
+    reader.onload = async (event) => {
+      const text = event.target.result;
+      const data = parseCSVLine(text);
+      
+      if (data.length < 2) {
+        showToast("檔案內容不足");
+        return;
+      }
+
+      const logsByDate = {};
+      // 從 index 1 開始 (跳過標題)
+      for (let i = 1; i < data.length; i++) {
+        const row = data[i];
+        if (row.length < 12) continue;
+
+        const [
+          rowDate, slot, subject, teacher, note,
+          specialEvents, parentComm, t_students, t_subjects,
+          n_students, n_subjects, s_requests
+        ] = row;
+
+        if (!logsByDate[rowDate]) {
+          logsByDate[rowDate] = {
+            sections: [],
+            specialEvents: specialEvents || "",
+            parentComm: parentComm || "",
+            todayFollowUp: { students: t_students || "", subjects: t_subjects || "" },
+            tomorrowFollowUp: { students: n_students || "", subjects: n_subjects || "" },
+            subjectTeacherRequests: s_requests || ""
+          };
+        }
+
+        logsByDate[rowDate].sections.push({ 
+          slot: slot || "", 
+          subject: subject || "", 
+          teacher: teacher || "", 
+          note: note || "" 
+        });
+      }
+
+      const dateCount = Object.keys(logsByDate).length;
+      if (dateCount === 0) {
+        showToast("找不到有效的資料列");
+        return;
+      }
+
+      setIsSyncing(true);
+      try {
+        const batch = writeBatch(db);
+        Object.keys(logsByDate).forEach(d => {
+          const logRef = doc(db, 'artifacts', appId, 'public', 'data', 'logs', d);
+          batch.set(logRef, logsByDate[d]);
+        });
+        await batch.commit();
+        showToast(`成功匯入 ${dateCount} 天的資料`);
+      } catch (error) {
+        showToast("雲端寫入失敗");
+      } finally {
+        setIsSyncing(false);
+        e.target.value = '';
+      }
+    };
+    reader.readAsText(file);
+  };
+
+  const showToast = (msg) => {
+    const toast = document.getElementById('toast');
+    if (toast) {
+      toast.innerText = msg;
+      toast.classList.remove('hidden');
+      setTimeout(() => toast.classList.add('hidden'), 2500);
+    }
+  };
+
+  const copyText = (text) => {
+    const el = document.createElement('textarea');
+    el.value = text;
+    document.body.appendChild(el);
+    el.select();
+    document.execCommand('copy');
+    document.body.removeChild(el);
+    showToast("已複製到剪貼簿");
+  };
+
+  return (
+    <div className="min-h-screen bg-slate-50 p-4 md:p-8 font-sans text-slate-800">
+      <div className="max-w-6xl mx-auto bg-white shadow-2xl rounded-3xl overflow-hidden border border-slate-200">
+        
+        {/* Header */}
+        <div className="bg-gradient-to-r from-indigo-700 to-blue-600 p-6 text-white">
+          <div className="flex flex-col md:flex-row justify-between items-center gap-6">
+            <div className="flex items-center gap-4">
+              <div className="bg-white/20 p-3 rounded-2xl backdrop-blur-sm shadow-inner">
+                <ClipboardList size={32} />
+              </div>
+              <div>
+                <h1 className="text-2xl font-bold tracking-tight">四年級雲端教師日誌</h1>
+                <div className="flex items-center gap-2 mt-1 opacity-90 text-xs">
+                  {isSyncing ? <Cloud className="animate-pulse" size={12}/> : <Cloud size={12}/>}
+                  <span>{user ? `連線中: ${user.uid.slice(0,6)}` : '正在同步...'}</span>
+                </div>
+              </div>
+            </div>
+
+            <div className="flex flex-wrap items-center justify-center gap-3">
+              <input 
+                type="date" 
+                value={date}
+                onChange={(e) => setDate(e.target.value)}
+                className="bg-white/10 border border-white/30 rounded-xl px-4 py-2 outline-none focus:bg-white/20 transition-all cursor-pointer font-medium"
+              />
+              <button 
+                onClick={() => saveToCloud(currentLog)}
+                className="bg-emerald-500 hover:bg-emerald-600 text-white px-5 py-2 rounded-xl flex items-center gap-2 transition-all shadow-md active:scale-95 font-bold"
+              >
+                <Save size={18} /> 儲存
+              </button>
+              
+              <div className="h-8 w-px bg-white/20 mx-1 hidden md:block"></div>
+
+              <input 
+                type="file" 
+                ref={fileInputRef} 
+                className="hidden" 
+                accept=".csv" 
+                onChange={importCSV}
+              />
+              <button 
+                onClick={() => fileInputRef.current?.click()}
+                className="bg-white/20 hover:bg-white/30 text-white px-5 py-2 rounded-xl flex items-center gap-2 transition-all font-bold"
+              >
+                <Upload size={18} /> 匯入
+              </button>
+
+              <button 
+                onClick={exportToCSV}
+                className="bg-amber-500 hover:bg-amber-600 text-white px-5 py-2 rounded-xl flex items-center gap-2 transition-all shadow-md active:scale-95 font-bold"
+              >
+                <Download size={18} /> 匯出
+              </button>
+            </div>
+          </div>
+        </div>
+
+        <div className="p-6 grid grid-cols-1 lg:grid-cols-12 gap-8">
+          
+          <div className="lg:col-span-8 space-y-6">
+            <section>
+              <div className="flex items-center justify-between mb-4 border-b border-slate-100 pb-2">
+                <div className="flex items-center gap-2 text-indigo-700 font-extrabold">
+                  <Clock size={20} />
+                  <h2 className="text-lg">教學進度錄 (週{["日","一","二","三","四","五","六"][new Date(date).getDay()]})</h2>
+                </div>
+                {isSyncing && <span className="text-[10px] text-slate-400 animate-pulse">處理中...</span>}
+              </div>
+              
+              <div className="grid gap-3">
+                {currentLog.sections && currentLog.sections.length > 0 ? (
+                  currentLog.sections.map((item, idx) => (
+                    <div key={idx} className="group flex gap-4 p-4 rounded-2xl border border-slate-100 bg-slate-50 hover:bg-white hover:shadow-md hover:border-indigo-100 transition-all">
+                      <div className="w-24 shrink-0 flex flex-col justify-center">
+                        <span className="text-[10px] font-bold text-slate-400 uppercase tracking-tighter">{item.slot}</span>
+                        <span className="text-sm font-black text-indigo-600 truncate">{item.subject}</span>
+                        <span className="text-[10px] text-slate-400 mt-1">{item.teacher === '導師' ? '👤 導師' : `🎨 ${item.teacher}`}</span>
+                      </div>
+                      <div className="flex-1">
+                        <textarea 
+                          placeholder={`${item.subject} 紀錄...`}
+                          className="w-full bg-transparent border-none focus:ring-0 text-sm p-0 placeholder:text-slate-300 resize-none min-h-[40px]"
+                          rows="2"
+                          value={item.note || ""}
+                          onChange={(e) => handleSectionChange(idx, e.target.value)}
+                        />
+                      </div>
+                    </div>
+                  ))
+                ) : (
+                  <div className="py-20 text-center bg-slate-50 rounded-3xl border-2 border-dashed border-slate-200">
+                    <Calendar className="mx-auto text-slate-200 mb-2" size={48} />
+                    <p className="text-slate-400 font-medium">週末無課程安排</p>
+                  </div>
+                )}
+              </div>
+            </section>
+
+            <div className="grid grid-cols-1 md:grid-cols-2 gap-4">
+              <div className="p-5 rounded-2xl bg-rose-50 border border-rose-100 shadow-sm">
+                <h3 className="flex items-center gap-2 text-rose-700 font-bold text-sm mb-3">
+                  <AlertCircle size={16} /> 特殊事件錄
+                </h3>
+                <textarea 
+                  className="w-full bg-transparent border-none focus:ring-0 text-sm p-0 h-32 resize-none"
+                  placeholder="紀錄衝突、意外或特殊表現..."
+                  value={currentLog.specialEvents || ""}
+                  onChange={(e) => handleInputChange('specialEvents', e.target.value)}
+                />
+              </div>
+              <div className="p-5 rounded-2xl bg-sky-50 border border-sky-100 shadow-sm">
+                <div className="flex items-center justify-between mb-3">
+                  <h3 className="flex items-center gap-2 text-sky-700 font-bold text-sm">
+                    <MessageSquare size={16} /> 告知家長事項
+                  </h3>
+                  <button onClick={() => copyText(currentLog.parentComm)} className="text-[10px] bg-sky-200 text-sky-800 px-2 py-1 rounded-lg font-bold">複製</button>
+                </div>
+                <textarea 
+                  className="w-full bg-transparent border-none focus:ring-0 text-sm p-0 h-32 resize-none"
+                  placeholder="聯絡簿或班群公告內容..."
+                  value={currentLog.parentComm || ""}
+                  onChange={(e) => handleInputChange('parentComm', e.target.value)}
+                />
+              </div>
+            </div>
+          </div>
+
+          <div className="lg:col-span-4 space-y-6">
+            <section className="bg-white p-6 rounded-3xl border border-slate-100 shadow-xl space-y-5">
+              <div className="flex items-center gap-2 text-emerald-600 font-bold">
+                <UserCheck size={20} />
+                <h2 className="text-lg">本日追蹤清單</h2>
+              </div>
+              <div>
+                <label className="text-[10px] font-black text-slate-400 uppercase tracking-widest block mb-1">需關注學生</label>
+                <input 
+                  className="w-full p-3 bg-slate-50 border-none rounded-xl text-sm focus:ring-2 focus:ring-emerald-400 transition-all"
+                  placeholder="學生姓名與原因"
+                  value={currentLog.todayFollowUp?.students || ""}
+                  onChange={(e) => handleFollowUpChange('todayFollowUp', 'students', e.target.value)}
+                />
+              </div>
+              <div>
+                <label className="text-[10px] font-black text-slate-400 uppercase tracking-widest block mb-1">待補科目/作業</label>
+                <input 
+                  className="w-full p-3 bg-slate-50 border-none rounded-xl text-sm focus:ring-2 focus:ring-emerald-400 transition-all"
+                  placeholder="缺交項目..."
+                  value={currentLog.todayFollowUp?.subjects || ""}
+                  onChange={(e) => handleFollowUpChange('todayFollowUp', 'subjects', e.target.value)}
+                />
+              </div>
+            </section>
+
+            <section className="bg-white p-6 rounded-3xl border border-slate-100 shadow-xl space-y-5">
+              <div className="flex items-center gap-2 text-indigo-600 font-bold">
+                <Calendar size={20} />
+                <h2 className="text-lg">隔日預報提醒</h2>
+              </div>
+              <div>
+                <label className="text-[10px] font-black text-slate-400 uppercase tracking-widest block mb-1">預計關懷對象</label>
+                <input 
+                  className="w-full p-3 bg-slate-50 border-none rounded-xl text-sm focus:ring-2 focus:ring-indigo-400 transition-all"
+                  placeholder="明天要談話的對象..."
+                  value={currentLog.tomorrowFollowUp?.students || ""}
+                  onChange={(e) => handleFollowUpChange('tomorrowFollowUp', 'students', e.target.value)}
+                />
+              </div>
+              <div>
+                <label className="text-[10px] font-black text-slate-400 uppercase tracking-widest block mb-1">明日需帶/收齊</label>
+                <input 
+                  className="w-full p-3 bg-slate-50 border-none rounded-xl text-sm focus:ring-2 focus:ring-indigo-400 transition-all"
+                  placeholder="如：直笛、回條、班費"
+                  value={currentLog.tomorrowFollowUp?.subjects || ""}
+                  onChange={(e) => handleFollowUpChange('tomorrowFollowUp', 'subjects', e.target.value)}
+                />
+              </div>
+            </section>
+
+            <section className="bg-gradient-to-br from-purple-50 to-indigo-50 p-6 rounded-3xl border border-purple-100 shadow-md">
+              <div className="flex items-center gap-2 text-purple-700 font-bold mb-3">
+                <BookOpen size={20} />
+                <h2 className="text-lg">科任課的要求</h2>
+              </div>
+              <textarea 
+                className="w-full bg-white/60 backdrop-blur-sm border-none rounded-2xl p-4 text-sm focus:ring-2 focus:ring-purple-400 min-h-[140px] shadow-inner"
+                placeholder="紀錄科任老師的反饋或特殊要求..."
+                value={currentLog.subjectTeacherRequests || ""}
+                onChange={(e) => handleInputChange('subjectTeacherRequests', e.target.value)}
+              />
+            </section>
+          </div>
+        </div>
+      </div>
+
+      <div id="toast" className="hidden fixed bottom-10 left-1/2 -translate-x-1/2 bg-slate-800 text-white px-8 py-3 rounded-2xl shadow-2xl font-bold animate-bounce z-50">
+        儲存成功
+      </div>
+    </div>
+  );
+};
+
+export default App;
