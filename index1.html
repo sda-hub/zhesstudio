@@ -1,0 +1,485 @@
+import React, { useState, useEffect, useRef } from 'react';
+import { 
+  Calendar, Download, Upload, Save, ChevronLeft, ChevronRight, 
+  Clock, BookOpen, AlertCircle, Phone, Target, ArrowRight, BookMarked
+} from 'lucide-react';
+
+// 內建課表資料 (對應 1=星期一 ~ 5=星期五)
+const SCHEDULE_DATA = {
+  1: [
+    { period: 1, time: '8:40—9:20', subject: '社會', teacher: '' },
+    { period: 2, time: '9:30—10:10', subject: '國語', teacher: '' },
+    { period: 3, time: '10:30—11:10', subject: '國際瞭望', teacher: '林巧敏師', isSpecialty: true },
+    { period: 4, time: '11:20—12:00', subject: '音樂(2)', teacher: '柏彥師', isSpecialty: true },
+  ],
+  2: [
+    { period: 1, time: '8:40—9:20', subject: '自然(3)', teacher: '劉佳陵師', isSpecialty: true },
+    { period: 2, time: '9:30—10:10', subject: '自然(3)', teacher: '劉佳陵師', isSpecialty: true },
+    { period: 3, time: '10:30—11:10', subject: '數學', teacher: '' },
+    { period: 4, time: '11:20—12:00', subject: '國語', teacher: '' },
+    { period: 5, time: '1:30—2:10', subject: '美勞', teacher: '', isSpecialty: true },
+    { period: 6, time: '2:15—2:55', subject: '奇藝探索-閱讀', teacher: '蘇瓊瑤師', isSpecialty: true },
+    { period: 7, time: '3:15—3:55', subject: '綜合', teacher: '' },
+  ],
+  3: [
+    { period: 1, time: '8:40—9:20', subject: '數學', teacher: '' },
+    { period: 2, time: '9:30—10:10', subject: '國語', teacher: '' },
+    { period: 3, time: '10:30—11:10', subject: '體育(2)', teacher: '林彥竹師', isSpecialty: true },
+    { period: 4, time: '11:20—12:00', subject: '健康', teacher: '黃靖桂師', isSpecialty: true },
+  ],
+  4: [
+    { period: 1, time: '8:40—9:20', subject: '未來公民', teacher: '曾聖堯師', isSpecialty: true },
+    { period: 2, time: '9:30—10:10', subject: '數學', teacher: '' },
+    { period: 3, time: '10:30—11:10', subject: '國語', teacher: '' },
+    { period: 4, time: '11:20—12:00', subject: '英語', teacher: '林巧敏師', isSpecialty: true },
+    { period: 5, time: '1:30—2:10', subject: '音樂(2)', teacher: '柏彥師', isSpecialty: true },
+    { period: 6, time: '2:15—2:55', subject: '自然(3)', teacher: '劉佳陵師', isSpecialty: true },
+    { period: 7, time: '3:15—3:55', subject: '社會', teacher: '' },
+  ],
+  5: [
+    { period: 1, time: '8:40—9:20', subject: '彈性(全校)', teacher: '' },
+    { period: 2, time: '9:30—10:10', subject: '數學', teacher: '' },
+    { period: 3, time: '10:30—11:10', subject: '國語', teacher: '' },
+    { period: 4, time: '11:20—12:00', subject: '社會', teacher: '' },
+    { period: 5, time: '1:30—2:10', subject: '本土(23客)', teacher: '劉昕妍師', isSpecialty: true },
+    { period: 6, time: '2:15—2:55', subject: '體育(2)', teacher: '林彥竹師', isSpecialty: true },
+    { period: 7, time: '3:15—3:55', subject: '綜合', teacher: '' },
+  ]
+};
+
+const DEFAULT_LOG_STATE = {
+  p1: '', p2: '', p3: '', p4: '', p5: '', p6: '', p7: '',
+  specialEvents: '',
+  parentNotes: '',
+  trackToday: '',
+  trackTomorrow: '',
+  specialtyNotes: ''
+};
+
+const CSV_HEADERS = [
+  '日期', '第一節', '第二節', '第三節', '第四節', '第五節', '第六節', '第七節',
+  '特殊事件', '告知家長', '本日追蹤', '隔日追蹤', '科任課要求'
+];
+
+export default function App() {
+  const [currentDate, setCurrentDate] = useState(() => {
+    const today = new Date();
+    // 格式化為 YYYY-MM-DD
+    return `${today.getFullYear()}-${String(today.getMonth() + 1).padStart(2, '0')}-${String(today.getDate()).padStart(2, '0')}`;
+  });
+  
+  const [logs, setLogs] = useState({});
+  const [toastMessage, setToastMessage] = useState('');
+  const fileInputRef = useRef(null);
+
+  // 初始化載入 LocalStorage
+  useEffect(() => {
+    const savedLogs = localStorage.getItem('teacherLogs');
+    if (savedLogs) {
+      try {
+        setLogs(JSON.parse(savedLogs));
+      } catch (e) {
+        console.error("載入存檔失敗", e);
+      }
+    }
+  }, []);
+
+  // 顯示提示訊息
+  const showToast = (msg) => {
+    setToastMessage(msg);
+    setTimeout(() => setToastMessage(''), 3000);
+  };
+
+  // 取得當天星期幾 (0 = 日, 1 = 一 ... 6 = 六)
+  const getDayOfWeek = (dateString) => {
+    return new Date(dateString).getDay();
+  };
+
+  // 取得當前日期的日誌狀態
+  const currentLog = logs[currentDate] || DEFAULT_LOG_STATE;
+
+  // 處理輸入變更
+  const handleInputChange = (field, value) => {
+    const updatedLogs = {
+      ...logs,
+      [currentDate]: {
+        ...currentLog,
+        [field]: value
+      }
+    };
+    setLogs(updatedLogs);
+    localStorage.setItem('teacherLogs', JSON.stringify(updatedLogs));
+  };
+
+  // 切換日期
+  const changeDate = (days) => {
+    const date = new Date(currentDate);
+    date.setDate(date.getDate() + days);
+    setCurrentDate(`${date.getFullYear()}-${String(date.getMonth() + 1).padStart(2, '0')}-${String(date.getDate()).padStart(2, '0')}`);
+  };
+
+  // CSV 處理工具
+  const escapeCSV = (str) => {
+    if (!str) return '""';
+    return '"' + String(str).replace(/"/g, '""') + '"';
+  };
+
+  const parseCSV = (str) => {
+    const result = [];
+    let row = [];
+    let inQuotes = false;
+    let currentValue = "";
+
+    for (let i = 0; i < str.length; i++) {
+      const char = str[i];
+      const nextChar = str[i + 1];
+
+      if (char === '"') {
+        if (inQuotes && nextChar === '"') {
+          currentValue += '"';
+          i++; 
+        } else {
+          inQuotes = !inQuotes;
+        }
+      } else if (char === ',' && !inQuotes) {
+        row.push(currentValue);
+        currentValue = "";
+      } else if ((char === '\n' || char === '\r') && !inQuotes) {
+        if (char === '\r' && nextChar === '\n') i++; 
+        row.push(currentValue);
+        if (row.some(val => val !== "")) result.push(row);
+        row = [];
+        currentValue = "";
+      } else {
+        currentValue += char;
+      }
+    }
+    if (currentValue !== "" || str[str.length - 1] === ',') {
+      row.push(currentValue);
+    }
+    if (row.length > 0 && row.some(val => val !== "")) {
+      result.push(row);
+    }
+    return result;
+  };
+
+  // 匯出 CSV
+  const handleExport = () => {
+    if (Object.keys(logs).length === 0) {
+      showToast('目前沒有資料可匯出');
+      return;
+    }
+
+    let csvContent = "\uFEFF" + CSV_HEADERS.join(',') + '\n'; // 加上 BOM 讓 Excel 支援中文
+
+    Object.keys(logs).sort().forEach(date => {
+      const dayData = logs[date];
+      const row = [
+        date,
+        dayData.p1 || '', dayData.p2 || '', dayData.p3 || '', dayData.p4 || '', 
+        dayData.p5 || '', dayData.p6 || '', dayData.p7 || '',
+        dayData.specialEvents || '',
+        dayData.parentNotes || '',
+        dayData.trackToday || '',
+        dayData.trackTomorrow || '',
+        dayData.specialtyNotes || ''
+      ].map(escapeCSV).join(',');
+      
+      csvContent += row + '\n';
+    });
+
+    const blob = new Blob([csvContent], { type: 'text/csv;charset=utf-8;' });
+    const link = document.createElement("a");
+    const url = URL.createObjectURL(blob);
+    link.setAttribute("href", url);
+    link.setAttribute("download", `教師日誌備份_${currentDate}.csv`);
+    document.body.appendChild(link);
+    link.click();
+    document.body.removeChild(link);
+    showToast('匯出成功！');
+  };
+
+  // 匯入 CSV
+  const handleImport = (e) => {
+    const file = e.target.files[0];
+    if (!file) return;
+
+    const reader = new FileReader();
+    reader.onload = (event) => {
+      const content = event.target.result;
+      const rows = parseCSV(content);
+      
+      if (rows.length <= 1) {
+        showToast('檔案格式錯誤或無資料');
+        return;
+      }
+
+      const importedLogs = { ...logs };
+      // 假設第一行是標題，從第二行開始讀取
+      for (let i = 1; i < rows.length; i++) {
+        const row = rows[i];
+        if (row.length < 13) continue; // 確保欄位數量正確
+
+        const date = row[0];
+        if (!date.match(/^\d{4}-\d{2}-\d{2}$/)) continue; // 檢查日期格式
+
+        importedLogs[date] = {
+          p1: row[1], p2: row[2], p3: row[3], p4: row[4], 
+          p5: row[5], p6: row[6], p7: row[7],
+          specialEvents: row[8],
+          parentNotes: row[9],
+          trackToday: row[10],
+          trackTomorrow: row[11],
+          specialtyNotes: row[12]
+        };
+      }
+
+      setLogs(importedLogs);
+      localStorage.setItem('teacherLogs', JSON.stringify(importedLogs));
+      showToast('資料匯入成功！');
+    };
+    reader.readAsText(file);
+    e.target.value = null; // 重置 input
+  };
+
+  const dayOfWeek = getDayOfWeek(currentDate);
+  const daySchedule = SCHEDULE_DATA[dayOfWeek] || [];
+  const isWeekend = dayOfWeek === 0 || dayOfWeek === 6;
+
+  const weekDayNames = ['日', '一', '二', '三', '四', '五', '六'];
+
+  return (
+    <div className="min-h-screen bg-[#F4F7F6] text-gray-800 font-sans pb-10">
+      {/* Toast 提示 */}
+      {toastMessage && (
+        <div className="fixed top-4 left-1/2 transform -translate-x-1/2 z-50 bg-green-600 text-white px-6 py-3 rounded-full shadow-lg font-medium tracking-wide transition-all">
+          {toastMessage}
+        </div>
+      )}
+
+      {/* 頂部導航列 */}
+      <header className="bg-white shadow-sm border-b border-gray-200 sticky top-0 z-10">
+        <div className="max-w-7xl mx-auto px-4 sm:px-6 lg:px-8 h-16 flex items-center justify-between">
+          <div className="flex items-center gap-2">
+            <BookOpen className="text-blue-600 w-6 h-6" />
+            <h1 className="text-xl font-bold text-gray-800 hidden sm:block">四年級教師日誌</h1>
+          </div>
+
+          {/* 日期控制器 */}
+          <div className="flex items-center bg-gray-100 rounded-lg p-1">
+            <button onClick={() => changeDate(-1)} className="p-2 hover:bg-white rounded-md transition-colors text-gray-600">
+              <ChevronLeft className="w-5 h-5" />
+            </button>
+            <div className="flex items-center gap-2 px-4 py-1">
+              <Calendar className="w-4 h-4 text-gray-500" />
+              <input 
+                type="date" 
+                value={currentDate}
+                onChange={(e) => setCurrentDate(e.target.value)}
+                className="bg-transparent border-none focus:ring-0 text-gray-800 font-medium cursor-pointer w-32"
+              />
+              <span className={`text-sm font-bold ${isWeekend ? 'text-red-500' : 'text-blue-600'}`}>
+                (星期{weekDayNames[dayOfWeek]})
+              </span>
+            </div>
+            <button onClick={() => changeDate(1)} className="p-2 hover:bg-white rounded-md transition-colors text-gray-600">
+              <ChevronRight className="w-5 h-5" />
+            </button>
+          </div>
+
+          {/* 工具按鈕 */}
+          <div className="flex items-center gap-2">
+            <input 
+              type="file" 
+              accept=".csv" 
+              className="hidden" 
+              ref={fileInputRef}
+              onChange={handleImport}
+            />
+            <button 
+              onClick={() => fileInputRef.current?.click()}
+              className="flex items-center gap-1 px-3 py-2 text-sm font-medium text-gray-700 bg-white border border-gray-300 rounded-md hover:bg-gray-50 transition-colors"
+            >
+              <Upload className="w-4 h-4" />
+              <span className="hidden sm:inline">匯入</span>
+            </button>
+            <button 
+              onClick={handleExport}
+              className="flex items-center gap-1 px-3 py-2 text-sm font-medium text-white bg-blue-600 rounded-md hover:bg-blue-700 transition-colors shadow-sm"
+            >
+              <Download className="w-4 h-4" />
+              <span className="hidden sm:inline">匯出試算表</span>
+            </button>
+          </div>
+        </div>
+      </header>
+
+      {/* 主要內容區 */}
+      <main className="max-w-7xl mx-auto px-4 sm:px-6 lg:px-8 mt-6">
+        {isWeekend && (
+          <div className="bg-yellow-50 border-l-4 border-yellow-400 p-4 mb-6 rounded-r-md">
+            <div className="flex">
+              <div className="flex-shrink-0">
+                <AlertCircle className="h-5 w-5 text-yellow-400" />
+              </div>
+              <div className="ml-3">
+                <p className="text-sm text-yellow-700 font-medium">今天是週末，沒有預設的課程表。您仍然可以填寫記事區塊。</p>
+              </div>
+            </div>
+          </div>
+        )}
+
+        <div className="grid grid-cols-1 lg:grid-cols-12 gap-6">
+          
+          {/* 左欄：分節紀錄 (佔 7 欄) */}
+          <div className="lg:col-span-7 space-y-4">
+            <div className="bg-white rounded-xl shadow-sm border border-gray-200 overflow-hidden">
+              <div className="bg-gray-50 px-5 py-4 border-b border-gray-200 flex justify-between items-center">
+                <h2 className="text-lg font-bold text-gray-800 flex items-center gap-2">
+                  <Clock className="w-5 h-5 text-blue-500" />
+                  1. 分節紀錄 (課堂日誌)
+                </h2>
+                {!isWeekend && daySchedule.length < 5 && (
+                  <span className="px-3 py-1 bg-green-100 text-green-700 text-xs font-bold rounded-full">半天班</span>
+                )}
+              </div>
+              
+              <div className="p-5 space-y-6">
+                {!isWeekend && daySchedule.map((classInfo) => (
+                  <div key={classInfo.period} className="flex flex-col sm:flex-row gap-4 border-b border-gray-100 pb-6 last:border-0 last:pb-0">
+                    {/* 課程資訊卡 */}
+                    <div className="sm:w-40 flex-shrink-0">
+                      <div className={`p-3 rounded-lg border ${classInfo.isSpecialty ? 'bg-orange-50 border-orange-100' : 'bg-blue-50 border-blue-100'}`}>
+                        <div className="text-xs text-gray-500 font-medium mb-1">
+                          第 {classInfo.period} 節 • {classInfo.time}
+                        </div>
+                        <div className={`text-lg font-bold ${classInfo.isSpecialty ? 'text-orange-700' : 'text-blue-700'}`}>
+                          {classInfo.subject}
+                        </div>
+                        {classInfo.teacher && (
+                          <div className="text-sm text-gray-600 mt-1 flex items-center gap-1">
+                            <BookMarked className="w-3 h-3" />
+                            {classInfo.teacher}
+                          </div>
+                        )}
+                        {classInfo.isSpecialty && (
+                          <span className="inline-block mt-2 px-2 py-0.5 bg-white text-orange-600 text-[10px] font-bold rounded shadow-sm border border-orange-100">
+                            科任
+                          </span>
+                        )}
+                      </div>
+                    </div>
+                    
+                    {/* 輸入區塊 */}
+                    <div className="flex-grow">
+                      <textarea
+                        className="w-full h-full min-h-[100px] p-3 text-sm text-gray-700 border border-gray-300 rounded-lg focus:ring-2 focus:ring-blue-500 focus:border-blue-500 resize-y transition-shadow"
+                        placeholder="請輸入本節課的學習狀況、學生表現或進度備註..."
+                        value={currentLog[`p${classInfo.period}`]}
+                        onChange={(e) => handleInputChange(`p${classInfo.period}`, e.target.value)}
+                      />
+                    </div>
+                  </div>
+                ))}
+
+                {isWeekend && (
+                  <div className="text-center py-10 text-gray-400">
+                    週末無排定課程，請至右側填寫備忘錄。
+                  </div>
+                )}
+              </div>
+            </div>
+          </div>
+
+          {/* 右欄：綜合記事與追蹤 (佔 5 欄) */}
+          <div className="lg:col-span-5 flex flex-col gap-4">
+            
+            {/* 2. 特殊事件 */}
+            <div className="bg-white rounded-xl shadow-sm border border-gray-200 overflow-hidden">
+              <div className="bg-red-50 px-4 py-3 border-b border-red-100 flex items-center gap-2">
+                <AlertCircle className="w-5 h-5 text-red-500" />
+                <h3 className="font-bold text-red-800">2. 特殊事件</h3>
+              </div>
+              <div className="p-4">
+                <textarea
+                  className="w-full min-h-[100px] p-3 text-sm text-gray-700 border border-gray-200 rounded-lg focus:ring-2 focus:ring-red-400 focus:border-transparent resize-y bg-gray-50 focus:bg-white"
+                  placeholder="紀錄今日特殊情況，例如：學生受傷、同儕衝突、訪客等..."
+                  value={currentLog.specialEvents}
+                  onChange={(e) => handleInputChange('specialEvents', e.target.value)}
+                />
+              </div>
+            </div>
+
+            {/* 3. 告知家長的事件 */}
+            <div className="bg-white rounded-xl shadow-sm border border-gray-200 overflow-hidden">
+              <div className="bg-green-50 px-4 py-3 border-b border-green-100 flex items-center gap-2">
+                <Phone className="w-5 h-5 text-green-600" />
+                <h3 className="font-bold text-green-800">3. 告知家長的事件</h3>
+              </div>
+              <div className="p-4">
+                <textarea
+                  className="w-full min-h-[100px] p-3 text-sm text-gray-700 border border-gray-200 rounded-lg focus:ring-2 focus:ring-green-400 focus:border-transparent resize-y bg-gray-50 focus:bg-white"
+                  placeholder="需寫在聯絡簿或致電家長的事項..."
+                  value={currentLog.parentNotes}
+                  onChange={(e) => handleInputChange('parentNotes', e.target.value)}
+                />
+              </div>
+            </div>
+
+            {/* 4 & 5. 學生追蹤 */}
+            <div className="bg-white rounded-xl shadow-sm border border-gray-200 overflow-hidden">
+              <div className="bg-purple-50 px-4 py-3 border-b border-purple-100 flex items-center gap-2">
+                <Target className="w-5 h-5 text-purple-600" />
+                <h3 className="font-bold text-purple-800">學生追蹤</h3>
+              </div>
+              <div className="p-4 space-y-4">
+                <div>
+                  <label className="block text-sm font-bold text-gray-700 mb-1 flex items-center gap-1">
+                    <span className="w-2 h-2 rounded-full bg-purple-400"></span>
+                    4. 本日需追蹤的學生與科目
+                  </label>
+                  <textarea
+                    className="w-full min-h-[80px] p-3 text-sm text-gray-700 border border-gray-200 rounded-lg focus:ring-2 focus:ring-purple-400 focus:border-transparent resize-y bg-gray-50 focus:bg-white"
+                    placeholder="例如：王小明 - 補交昨日數學習作"
+                    value={currentLog.trackToday}
+                    onChange={(e) => handleInputChange('trackToday', e.target.value)}
+                  />
+                </div>
+                <div>
+                  <label className="block text-sm font-bold text-gray-700 mb-1 flex items-center gap-1">
+                    <span className="w-2 h-2 rounded-full bg-indigo-400"></span>
+                    5. 隔日需追蹤的學生與科目
+                    <ArrowRight className="w-3 h-3 text-indigo-500 ml-1" />
+                  </label>
+                  <textarea
+                    className="w-full min-h-[80px] p-3 text-sm text-gray-700 border border-gray-200 rounded-lg focus:ring-2 focus:ring-indigo-400 focus:border-transparent resize-y bg-gray-50 focus:bg-white"
+                    placeholder="例如：陳小華 - 明日重測國語聽寫"
+                    value={currentLog.trackTomorrow}
+                    onChange={(e) => handleInputChange('trackTomorrow', e.target.value)}
+                  />
+                </div>
+              </div>
+            </div>
+
+            {/* 6. 科任課的要求 */}
+            <div className="bg-white rounded-xl shadow-sm border border-gray-200 overflow-hidden">
+              <div className="bg-orange-50 px-4 py-3 border-b border-orange-100 flex items-center gap-2">
+                <BookMarked className="w-5 h-5 text-orange-600" />
+                <h3 className="font-bold text-orange-800">6. 科任課的要求</h3>
+              </div>
+              <div className="p-4">
+                <textarea
+                  className="w-full min-h-[100px] p-3 text-sm text-gray-700 border border-gray-200 rounded-lg focus:ring-2 focus:ring-orange-400 focus:border-transparent resize-y bg-gray-50 focus:bg-white"
+                  placeholder="紀錄科任老師（如自然、音樂、體育老師）交代的事項、作業或學生表現..."
+                  value={currentLog.specialtyNotes}
+                  onChange={(e) => handleInputChange('specialtyNotes', e.target.value)}
+                />
+              </div>
+            </div>
+
+          </div>
+        </div>
+      </main>
+    </div>
+  );
+}
